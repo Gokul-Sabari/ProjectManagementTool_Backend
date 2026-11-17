@@ -42,6 +42,19 @@ export class ProjectService {
             case 'stage': return this.stage(context);
             case 'createProject':
                 if (p.head) await this.user(context, p.head);
+                if (p.stages?.length) return this.model.transaction(async transaction => {
+                    const { stages, ...projectFields } = p;
+                    const [project] = await this.model.createProject(projectFields, transaction);
+                    const createdStages = [];
+                    for (const stage of stages) {
+                        const [created] = await this.model.createStage({
+                            companyId: context.companyId, projectId: project.Project_Id, ...stage,
+                        }, transaction);
+                        createdStages.push(created);
+                    }
+                    return { ...project, stages: createdStages };
+                });
+                delete p.stages;
                 return (await this.model.createProject(p))[0];
             case 'updateProject':
                 await this.project(context);

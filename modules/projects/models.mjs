@@ -41,12 +41,12 @@ export class ProjectModel {
             WHERE Company_id=@companyId AND Del_Flag=0 ORDER BY Project_Id DESC
             OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`, p);
     }
-    createProject(p) {
+    createProject(p, connection) {
         return this.query(`INSERT dbo.tbl_Project_Master
             (Project_Name, Project_Desc, Company_id, Project_Head, Est_Start_Dt, Est_End_Dt,
              Project_Status, Entry_By, Entry_Date, IsActive, Del_Flag)
             OUTPUT INSERTED.*
-            VALUES (@name,@description,@companyId,@head,@start,@end,@status,@userId,SYSUTCDATETIME(),1,0)`, p);
+            VALUES (@name,@description,@companyId,@head,@start,@end,@status,@userId,SYSUTCDATETIME(),1,0)`, p, connection);
     }
     updateProject(p) {
         return this.query(`UPDATE dbo.tbl_Project_Master SET Project_Name=@name, Project_Desc=@description,
@@ -67,17 +67,21 @@ export class ProjectModel {
         return this.query(`SELECT Id, Stage_Name, Sort_Order, IsActive FROM dbo.tbl_Project_Stage
             WHERE Id=@stageId AND Project_Id=@projectId AND Company_Id=@companyId`, p);
     }
-    createStage(p) {
-        return this.query(`INSERT dbo.tbl_Project_Stage(Project_Id,Company_Id,Stage_Name,Sort_Order)
-            OUTPUT INSERTED.Id VALUES(@projectId,@companyId,@stageName,@sortOrder)`, p);
+    createStage(p, connection) {
+        return this.query(`INSERT dbo.tbl_Project_Stage(Project_Id,Company_Id,Stage_Name,Sort_Order,IsActive)
+            OUTPUT INSERTED.* VALUES(@projectId,@companyId,@stageName,@sortOrder,@active)`, p, connection);
     }
     updateStage(p) {
         return this.query(`UPDATE dbo.tbl_Project_Stage SET Stage_Name=@stageName, Sort_Order=@sortOrder, IsActive=@active
             OUTPUT INSERTED.Id WHERE Id=@stageId AND Project_Id=@projectId AND Company_Id=@companyId`, p);
     }
     taskTypes(p) {
-        return this.query(`SELECT Task_Type_Id, Task_Type, Project_Id, stage_Id, Status FROM dbo.tbl_Task_Type
-            WHERE Project_Id=@projectId AND ISNULL(TT_Del_Flag,0)=0 ORDER BY Task_Type_Id DESC
+        return this.query(`SELECT t.Task_Type_Id, t.Task_Type, t.Project_Id, t.stage_Id, t.Status,
+            s.Stage_Name, s.Sort_Order AS Stage_Sort_Order
+            FROM dbo.tbl_Task_Type t
+            LEFT JOIN dbo.tbl_Project_Stage s ON s.Id=t.stage_Id
+                AND s.Project_Id=t.Project_Id AND s.Company_Id=@companyId
+            WHERE t.Project_Id=@projectId AND ISNULL(t.TT_Del_Flag,0)=0 ORDER BY t.Task_Type_Id DESC
             OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`, p);
     }
     createTaskType(p) {

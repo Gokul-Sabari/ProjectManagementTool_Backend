@@ -29,6 +29,11 @@ export function fieldsFor(action, body = {}) {
             end: date(body.Est_End_Dt, 'Est_End_Dt'), status: integer(body.Project_Status ?? 0, 'Project_Status', { min: 0 }),
         };
         if (result.start && result.end && result.end < result.start) throw apiError(400, 'Est_End_Dt must not precede Est_Start_Dt');
+        if (action === 'createProject' && body.stages !== undefined) {
+            if (!Array.isArray(body.stages) || body.stages.length > 100)
+                throw apiError(400, 'stages must be an array of at most 100 stages');
+            result.stages = body.stages.map(stage => fieldsFor('createStage', stage));
+        }
         return result;
     }
     if (['createStage', 'updateStage'].includes(action)) return {
@@ -102,7 +107,8 @@ export const handle = (action, serviceFactory = pool => new ProjectService(new P
 
 export function projectErrorHandler(error, req, res, next) {
     if (res.headersSent) return next(error);
-    const stageRoute = /\/(stages|task-types)(\/|$)/.test(req.originalUrl?.split('?')[0] || '');
+    const stageRoute = /\/(stages|task-types)(\/|$)/.test(req.originalUrl?.split('?')[0] || '') ||
+        (req.method === 'POST' && /\/api\/projects\/?$/.test(req.originalUrl?.split('?')[0] || '') && req.body?.stages?.length > 0);
     const missingStageSchema = stageRoute && ([207, 208].includes(error.number) || [207, 208].includes(error.originalError?.info?.number));
     const status = missingStageSchema ? 503 : ([400, 401, 403, 404, 413, 415].includes(error.status) ? error.status : 500);
     if (status === 500) return next(error);

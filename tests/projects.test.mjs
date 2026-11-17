@@ -8,6 +8,88 @@ import ProjectRouter, { projectPaths } from '../modules/projects/index.mjs';
 import { app } from '../app.mjs';
 
 const context = { companyId: 2, userId: 8, projectId: 10, topicId: 20 };
+test('task-type listing maps stages within the project and company without hiding unassigned types', async () => {
+    const rows = [
+        { Task_Type_Id: 12, stage_Id: 4, Stage_Name: 'Design', Stage_Sort_Order: 4 },
+        { Task_Type_Id: 13, stage_Id: null, Stage_Name: null, Stage_Sort_Order: null },
+    ];
+    const inputs = {};
+    let statement;
+    class Request {
+        input(name, type, value) { inputs[name] = value; return this; }
+        async query(value) { statement = value; return { recordset: rows }; }
+    }
+    const service = new ProjectService(new ProjectModel({}, { Request }));
+    // The service checks project ownership before executing the task-type query.
+    service.model.project = async p => { assert.equal(p.companyId, 2); return [{ Project_Id: 10 }]; };
+    assert.deepEqual(await service.run('taskTypes', context, { offset: 0, limit: 50 }), rows);
+    assert.match(statement, /LEFT JOIN dbo\.tbl_Project_Stage s ON s\.Id=t\.stage_Id/);
+    assert.match(statement, /s\.Project_Id=t\.Project_Id AND s\.Company_Id=@companyId/);
+    assert.match(statement, /t\.Project_Id=@projectId/);
+    assert.match(statement, /OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY/);
+    assert.equal(inputs.companyId, 2);
+    assert.equal(inputs.projectId, 10);
+    const response = projectPaths['/api/projects/{projectId}/task-types'].get.responses[200].content['application/json'];
+    assert.equal(response.schema.properties.data.items.$ref, '#/components/schemas/TaskType');
+    assert.equal(response.example.data[0].Stage_Name, 'Design');
+});
+test('project creation validates nested stages before writing', () => {
+    for (const stages of [null, {}, [null], [{}], [{ Stage_Name: ' ' }], Array(101).fill({ Stage_Name: 'x' })]) {
+        assert.throws(() => fieldsFor('createProject', { Project_Name: 'Portal', stages }), { status: 400 });
+    }
+    assert.deepEqual(fieldsFor('createProject', { Project_Name: 'Portal', stages: [
+        { Stage_Name: ' Design ', IsActive: 0, Company_Id: 999, Project_Id: 999 },
+    ] }).stages, [{ stageName: 'Design', sortOrder: 0, active: 0 }]);
+});
+
+test('project and nested stages share a transaction and authenticated company', async () => {
+    const tx = {};
+    const service = new ProjectService({
+        transaction: async work => work(tx),
+        createProject: async (p, connection) => {
+            assert.equal(connection, tx);
+            assert.equal(p.stages, undefined);
+            return [{ Project_Id: 42, Project_Name: p.name }];
+        },
+        createStage: async (p, connection) => {
+            assert.equal(connection, tx);
+            assert.equal(p.projectId, 42);
+            assert.equal(p.companyId, 2);
+            assert.equal(p.active, 0);
+            return [{ Id: 7, Stage_Name: p.stageName }];
+        },
+    });
+    const result = await service.run('createProject', { companyId: 2, userId: 8 },
+        fieldsFor('createProject', { Project_Name: 'Portal', stages: [{ Stage_Name: 'Design', IsActive: 0 }] }));
+    assert.equal(result.Project_Id, 42);
+    assert.deepEqual(result.stages, [{ Id: 7, Stage_Name: 'Design' }]);
+});
+
+test('nested stage failure rolls back project creation', async () => {
+    const calls = [];
+    class Transaction {
+        async begin() { calls.push('begin'); }
+        async commit() { calls.push('commit'); }
+        async rollback() { calls.push('rollback'); }
+    }
+    const model = new ProjectModel({}, { Transaction });
+    model.createProject = async () => { calls.push('project'); return [{ Project_Id: 42 }]; };
+    model.createStage = async () => { throw new Error('stage failed'); };
+    await assert.rejects(new ProjectService(model).run('createProject', { companyId: 2, userId: 8 },
+        { name: 'Portal', stages: [{ stageName: 'Design' }] }), /stage failed/);
+    assert.deepEqual(calls, ['begin', 'project', 'rollback']);
+});
+
+test('project-only requests do not require stage schema or transaction', async () => {
+    const service = new ProjectService({ createProject: async p => {
+        assert.equal(p.stages, undefined);
+        return [{ Project_Id: 42 }];
+    } });
+    for (const stages of [undefined, []]) {
+        assert.deepEqual(await service.run('createProject', { companyId: 2, userId: 8 }, { name: 'Portal', stages }), { Project_Id: 42 });
+    }
+});
+
 test('validation rejects malformed IDs, invalid dates, overlong names and oversized membership arrays', () => {
     for (const value of ['1 OR 1=1', '1x', '-1', '1.5', {}, 2147483648]) assert.throws(() => integer(value, 'id'), { status: 400 });
     assert.throws(() => fieldsFor('createProject', { Project_Name: '  ' }), { status: 400 });
@@ -155,8 +237,12 @@ test('Swagger exposes implemented routes, bearer auth, binary uploads and local 
         assert.ok(spec.paths['/api/projects'].post);
         for (const route of Object.keys(projectPaths)) assert.ok(spec.paths[route]);
         assert.equal(spec.paths['/api/projects/{projectId}/stages/{stageId}/files'].post.requestBody.content['application/octet-stream'].schema.format, 'binary');
-        assert.equal((await fetch(base + '/api-docs/assets/swagger-ui-bundle.js')).status, 200);
-        assert.equal((await fetch(base + '/api/not-found')).status, 404);
+        const asset = await fetch(base + '/api-docs/assets/swagger-ui-bundle.js');
+        assert.equal(asset.status, 200);
+        await asset.arrayBuffer();
+        const missingRoute = await fetch(base + '/api/not-found');
+        assert.equal(missingRoute.status, 404);
+        await missingRoute.json();
     });
 });
 

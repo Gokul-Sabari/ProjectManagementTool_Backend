@@ -53,6 +53,20 @@ All project routes start with `/api/projects`. Company and author IDs come from 
 
 List requests accept `offset` (default 0) and `limit` (default 50, maximum 100). PUT replaces editable values; include optional values you want to retain. Swagger shows the complete request bodies.
 
+Create stages in the same `POST /api/projects` request by supplying an optional `stages` array (maximum 100):
+
+```json
+{
+  "Project_Name": "Customer Portal",
+  "stages": [
+    { "Stage_Name": "Requirements", "Sort_Order": 1, "IsActive": 1 },
+    { "Stage_Name": "Development", "Sort_Order": 2, "IsActive": 1 }
+  ]
+}
+```
+
+The project and stages are saved in one transaction; any stage failure rolls back the project. The response contains the project fields and a `stages` array of created records. Omitting stages or supplying an empty array preserves project-only creation. Nested stages are supported during creation only. The stage migration below is required when creating stages.
+
 ### Missing stage schema
 
 Read-only inspection found the existing project, task-type and four discussion tables in both configured company databases. Their discussion timestamp column is `CreatedAt`. Neither company has `tbl_Project_Stage`, `tbl_Project_Stage_Files`, or `tbl_Task_Type.stage_Id`.

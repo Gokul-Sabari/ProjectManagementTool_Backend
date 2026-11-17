@@ -32,7 +32,11 @@ export const projectSchemas = {
         example: projectExample,
     },
     StageInput: object({ Stage_Name: { ...str(200), example: 'Requirements' }, Sort_Order: { type: 'integer', minimum: 0, default: 0 }, IsActive: { type: 'integer', enum: [0, 1], default: 1 } }, ['Stage_Name']),
-    TaskTypeInput: object({ Task_Type: { ...str(200), example: 'SDLC - Design' }, stage_Id: { ...id, nullable: true }, Status: { type: 'integer', minimum: 0, default: 0 } }, ['Task_Type']),
+    TaskTypeInput: object({ Task_Type: { ...str(200), example: 'SDLC - Design' }, stage_Id: { ...id, nullable: true, description: 'References tbl_Project_Stage.Id in this project and company.' }, Status: { type: 'integer', minimum: 0, default: 0 } }, ['Task_Type']),
+    TaskType: object({ Task_Type_Id: id, Task_Type: str(200), Project_Id: id,
+        stage_Id: { ...id, nullable: true }, Status: { type: 'integer', nullable: true },
+        Stage_Name: { ...str(200), nullable: true }, Stage_Sort_Order: { type: 'integer', nullable: true },
+    }),
     TopicInput: object({ Topic: { ...str(100), example: 'Requirements review' }, Description: str(250), memberIds: { type: 'array', maxItems: 100, items: id, description: 'Company-local tbl_Users.UserId values. The author is added automatically.' } }, ['Topic']),
     TopicUpdateInput: object({ Topic: str(100), Description: str(250) }, ['Topic']),
     MemberInput: object({ User_Id: id }, ['User_Id']),
@@ -70,7 +74,15 @@ function operation(route, method, tag, summary, schema, paged = false, descripti
     return definition;
 }
 operation('', 'get', 'Projects', 'List projects in the authenticated company', null, true);
-operation('', 'post', 'Projects', 'Create a project', 'ProjectInput');
+projectSchemas.ProjectCreateInput = {
+    ...projectSchemas.ProjectInput,
+    properties: { ...projectSchemas.ProjectInput.properties,
+        stages: { type: 'array', maxItems: 100, items: { $ref: '#/components/schemas/StageInput' },
+            description: 'Optional stages created with the project in one transaction.' },
+    },
+};
+operation('', 'post', 'Projects', 'Create a project with optional stages', 'ProjectCreateInput', false,
+    'Creates the project and supplied stages atomically. A stage failure rolls back the project. Requires the stage migration when stages are supplied. The response includes stages when a nonempty stages array is supplied.');
 operation('/{projectId}', 'get', 'Projects', 'Get a project');
 operation('/{projectId}', 'put', 'Projects', 'Update project details', 'ProjectInput', false, 'Replace editable details. Supply all values to retain; omitted optional fields are reset. Company and author identities come from the login token.');
 // Project endpoints return the complete master record, not only its ID.
@@ -92,7 +104,22 @@ for (const [route, method] of [['/api/projects', 'post'], ['/api/projects/{proje
         Est_Start_Dt: projectExample.Est_Start_Dt, Est_End_Dt: projectExample.Est_End_Dt, Project_Status: 1,
     };
 }
-operation('/{projectId}/task-types', 'get', 'Task types', 'List project task types', null, true);
+projectPaths['/api/projects'].post.requestBody.content['application/json'].example.stages = [
+    { Stage_Name: 'Requirements', Sort_Order: 1, IsActive: 1 },
+    { Stage_Name: 'Development', Sort_Order: 2, IsActive: 1 },
+];
+projectPaths['/api/projects'].post.responses[201].content['application/json'].schema.properties.data = {
+    allOf: [{ $ref: '#/components/schemas/Project' }, object({
+        stages: { type: 'array', items: { $ref: '#/components/schemas/ProjectStage' } },
+    })],
+};
+const taskTypeList = operation('/{projectId}/task-types', 'get', 'Task types', 'List project task types with mapped stages', null, true,
+    'Maps tbl_Task_Type.stage_Id to tbl_Project_Stage.Id within the authenticated company and project. Unassigned or unmatched stages return null Stage_Name and Stage_Sort_Order; task types remain in the list.');
+taskTypeList.responses[200] = { description: 'Task types with linked stage details', content: { 'application/json': {
+    schema: object({ success: { type: 'boolean' }, data: { type: 'array', items: { $ref: '#/components/schemas/TaskType' } }, message: { type: 'string' } }, ['success', 'data', 'message']),
+    example: { success: true, data: [{ Task_Type_Id: 12, Task_Type: 'UI design', Project_Id: 1,
+        stage_Id: 4, Status: 0, Stage_Name: 'Design', Stage_Sort_Order: 4 }], message: 'Request successful' },
+} } };
 operation('/{projectId}/task-types', 'post', 'Task types', 'Create a task type with an optional stage', 'TaskTypeInput');
 operation('/{projectId}/task-types/{taskTypeId}', 'put', 'Task types', 'Update a task type and its stage', 'TaskTypeInput');
 operation('/{projectId}/stages', 'get', 'Stages', 'List SDLC stages', null, true);
