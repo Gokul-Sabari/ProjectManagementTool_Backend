@@ -16,6 +16,9 @@ if (args.length !== 2 || args[0] !== '--company' || !/^[1-9]\d*$/.test(args[1]) 
             AppliedAt datetime2 NOT NULL DEFAULT(SYSUTCDATETIME()))`);
         const directory = new URL('../db/migrations/', import.meta.url);
         const files = (await readdir(directory)).filter(name => /^\d{4}_[a-z0-9_]+\.sql$/.test(name)).sort();
+        // Legacy stage IDs must become unique before 0001 creates attachment FKs.
+        const repair = files.indexOf('0002_repair_stage_ids.sql');
+        if (repair >= 0) files.unshift(...files.splice(repair, 1));
         for (const name of files) {
             const source = await readFile(new URL(name, directory), 'utf8');
             const transaction = new sql.Transaction(pool);

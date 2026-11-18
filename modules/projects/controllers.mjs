@@ -119,9 +119,13 @@ export function projectErrorHandler(error, req, res, next) {
     if (res.headersSent) return next(error);
     const stageRoute = /\/(stages|task-types)(\/|$)/.test(req.originalUrl?.split('?')[0] || '') ||
         (req.method === 'POST' && /\/api\/projects\/?$/.test(req.originalUrl?.split('?')[0] || '') && req.body?.stages?.length > 0);
-    const missingStageSchema = stageRoute && ([207, 208].includes(error.number) || [207, 208].includes(error.originalError?.info?.number));
+    const numbers = [error.number, error.originalError?.info?.number];
+    const missingIdGenerator = stageRoute && numbers.includes(51001);
+    const missingStageSchema = stageRoute && numbers.some(number => [207, 208, 51001].includes(number));
     const status = missingStageSchema ? 503 : ([400, 401, 403, 404, 413, 415].includes(error.status) ? error.status : 500);
     if (status === 500) return next(error);
     return res.status(status).json({ success: false, data: null,
-        message: missingStageSchema ? 'Required stage or task-type tables/columns are missing or incompatible in the selected company database. Verify tbl_Project_Stage, tbl_Project_Stage_Files, and tbl_Task_Type.stage_Id.' : error.message });
+        message: missingIdGenerator
+            ? 'Stage ID generation is missing in the selected company database. Apply backend/db/migrations/0002_repair_stage_ids.sql to that company database before creating stages.'
+            : missingStageSchema ? 'Required stage or task-type tables/columns are missing or incompatible in the selected company database. Verify tbl_Project_Stage, tbl_Project_Stage_Files, and tbl_Task_Type.stage_Id.' : error.message });
 }

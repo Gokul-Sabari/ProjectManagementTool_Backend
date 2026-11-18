@@ -73,8 +73,13 @@ export class ProjectModel {
             WHERE Id=@stageId AND Project_Id=@projectId AND Company_Id=@companyId`, p);
     }
     createStage(p, connection) {
-        return this.query(`INSERT dbo.tbl_Project_Stage(Project_Id,Company_Id,Stage_Name,Sort_Order,IsActive)
-            OUTPUT INSERTED.* VALUES(@projectId,@companyId,@stageName,@sortOrder,@active)`, p, connection);
+        return this.query(`IF COLUMNPROPERTY(OBJECT_ID(N'dbo.tbl_Project_Stage'),N'Id','IsIdentity')=0
+                AND NOT EXISTS (SELECT 1 FROM sys.default_constraints
+                    WHERE parent_object_id=OBJECT_ID(N'dbo.tbl_Project_Stage')
+                    AND parent_column_id=COLUMNPROPERTY(OBJECT_ID(N'dbo.tbl_Project_Stage'),N'Id','ColumnId'))
+                THROW 51001, 'Stage ID generation is missing. Apply 0002_repair_stage_ids.sql to this company database.', 1;
+            INSERT dbo.tbl_Project_Stage(Project_Id,Company_Id,Stage_Name,Sort_Order,IsActive,CreatedAt)
+            OUTPUT INSERTED.* VALUES(@projectId,@companyId,@stageName,@sortOrder,@active,SYSUTCDATETIME())`, p, connection);
     }
     updateStage(p) {
         return this.query(`UPDATE dbo.tbl_Project_Stage SET Stage_Name=@stageName, Sort_Order=@sortOrder, IsActive=@active

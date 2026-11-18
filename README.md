@@ -73,6 +73,16 @@ The project and stages are saved in one transaction; any stage failure rolls bac
 
 ### Stage storage compatibility
 
+For an existing stage table whose `Id` is nullable and has no generator, migration
+`0002_repair_stage_ids.sql` assigns IDs to null rows using a sequence, preserves
+existing IDs, enforces uniqueness and NOT NULL, and adds defaults for future IDs
+and creation timestamps. Historical null creation timestamps remain unknown.
+Review and apply in the intended company database with
+`npm run migrate -- --company 1` (replace 1 with the intended configured company).
+The runner executes this repair before bootstrap migration 0001 so its foreign
+keys can be created. Review both scripts before running; the command changes the
+database. The API does not run this repair automatically.
+
 The API does not apply database migrations. It expects `dbo.tbl_Project_Stage.Id` to be a generated, unique `BIGINT`; `dbo.tbl_Task_Type.stage_Id` and `dbo.tbl_Project_Stage_Files.Stage_Id` must also be `BIGINT`. The stage file table uses `Id int IDENTITY`, `Stage_Id bigint`, `Project_Id bigint`, `Company_Id int`, `User_Id int`, `File_Name nvarchar(500)`, `File_Path nvarchar(500)`, `File_Type nvarchar(100)`, `File_Size int`, and `CreatedAt datetime2` with a `SYSUTCDATETIME()` default. File IDs remain `int`.
 
 The checked-in `backend/db/migrations/0001_project_stages.sql` is an optional template for databases that do not already have these tables. Compare it with each company's actual schema before considering it; do not apply it to an existing stage table without checking its ID generation and related column types. Missing or incompatible stage/task-type tables and columns return HTTP 503 with an actionable message.
