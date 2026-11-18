@@ -24,7 +24,8 @@ router.get('/:projectId/discussions/:topicId/messages', handle('messages'));
 router.post('/:projectId/discussions/:topicId/messages', handle('createMessage'));
 for (const prefix of ['/:projectId/stages/:stageId/files', '/:projectId/discussions/:topicId/files']) {
     router.get(prefix, handle('files'));
-    router.post(prefix, express.raw({ type: 'application/octet-stream', limit: '10mb' }), handle('upload'));
+    router.post(prefix, express.raw({ type: '*/*', limit: '10mb' }), handle('upload'));
+    router.get(`${prefix}/key/:fileKey/download`, handle('downloadByKey'));
     router.get(`${prefix}/:fileId/download`, handle('download'));
 }
 router.use(projectErrorHandler);

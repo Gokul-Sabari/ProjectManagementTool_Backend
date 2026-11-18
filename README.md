@@ -15,6 +15,10 @@ npm start
 
 Default port: 9002. No production credentials or user records are included. Requires the existing SQL Server portal/company tables and login stored procedures; this project does not create a database. Configure companies through COMPANY1_* variables (additional COMPANY2_*, etc. supported), or local companies.json with id, name, host, user, password and database fields. Company configuration only reads this project's file or an explicit COMPANIES_FILE, never the parent project's file. Unrelated report-table initialization was removed.
 
+## Serve the frontend and API on one port
+
+From this directory, run `npm run build:frontend` to build the sibling `Software_tool_Frontend` project into this backend's `frontend/` directory. Then run `npm start`; Express serves the frontend and `/api` routes from the same configured port (9002 by default). Rebuild the frontend after making UI changes. For local development, start the backend and Vite separately; Vite proxies `/api` to port 9002 by default, configurable with `VITE_PROJECTMANAGEMENT_API_TARGET`.
+
 ## Routes
 
 Each prefix `/api/authorization`, `/api/configuration/login`, and `/api/login` supports:
@@ -31,13 +35,13 @@ Request fields, response shapes and session/company behavior come from the exist
 
 ## Verification
 
-`npm test` checks login and project API validation, company isolation, discussion membership, topic creation, upload cleanup and Swagger responses with mocks. Real database writes and migrations have not been integration tested against a designated test database. No lint script is configured.
+`npm test` checks login and project API validation, company isolation, company-wide discussion access, topic creation, upload cleanup and Swagger responses with mocks. Real database writes and migrations have not been integration tested against a designated test database. No lint script is configured.
 
 ## Project APIs and Swagger
 
 Run `npm install`, then `npm start`. Open `/api-docs` on the configured PORT (currently observed as 5005; default is 9002). Swagger UI assets are installed locally. Log in, copy the intended company's token from `data.currentCompany`, and enter it in **Authorize** without a Bearer prefix.
 
-All project routes start with `/api/projects`. Company and author IDs come from the token; user IDs in request bodies refer to company-local `tbl_Users.UserId` values. Authenticated company users may create/update projects and stages. Discussions are project-level; only topic members may read/update a topic, add members, send messages or access its attachments. Creating a topic adds the caller automatically.
+All project routes start with `/api/projects`. Company and author IDs come from the token; user IDs in request bodies refer to company-local `tbl_Users.UserId` values. Authenticated company users may create/update projects and stages. Discussions are project-level and scoped to the owning company: every authenticated user in that company can view discussion history, send messages, and access attachments without being added as a participant. Creating a topic still records its creator in the legacy membership table.
 
 | Resource | Methods and path |
 | --- | --- |
@@ -65,26 +69,16 @@ Create stages in the same `POST /api/projects` request by supplying an optional 
 }
 ```
 
-The project and stages are saved in one transaction; any stage failure rolls back the project. The response contains the project fields and a `stages` array of created records. Omitting stages or supplying an empty array preserves project-only creation. Nested stages are supported during creation only. The stage migration below is required when creating stages.
+The project and stages are saved in one transaction; any stage failure rolls back the project. The response contains the project fields and a `stages` array of created records. Omitting stages or supplying an empty array preserves project-only creation. Nested stages are supported during creation only.
 
-### Missing stage schema
+### Stage storage compatibility
 
-Read-only inspection found the existing project, task-type and four discussion tables in both configured company databases. Their discussion timestamp column is `CreatedAt`. Neither company has `tbl_Project_Stage`, `tbl_Project_Stage_Files`, or `tbl_Task_Type.stage_Id`.
+The API does not apply database migrations. It expects `dbo.tbl_Project_Stage.Id` to be a generated, unique `BIGINT`; `dbo.tbl_Task_Type.stage_Id` and `dbo.tbl_Project_Stage_Files.Stage_Id` must also be `BIGINT`. The stage file table uses `Id int IDENTITY`, `Stage_Id bigint`, `Project_Id bigint`, `Company_Id int`, `User_Id int`, `File_Name nvarchar(500)`, `File_Path nvarchar(500)`, `File_Type nvarchar(100)`, `File_Size int`, and `CreatedAt datetime2` with a `SYSUTCDATETIME()` default. File IDs remain `int`.
 
-The unapplied migration `backend/db/migrations/0001_project_stages.sql` creates those stage tables and adds the nullable task-type stage reference. Each project has multiple stages, and each task type optionally selects one stage. Existing task types remain unassigned. No existing rows are rewritten. Stage/task-type requests return an actionable HTTP 503 until this migration is applied.
-
-After selecting the intended database environment, apply to one configured company at a time:
-
-```powershell
-npm run migrate -- --company 1
-# Run separately for another company only if intended:
-# npm run migrate -- --company 2
-```
-
-The runner records applied files in that company's `SchemaMigrations` table and skips them on repeat runs. It never chooses the portal database. The migration has not been applied as part of implementation.
+The checked-in `backend/db/migrations/0001_project_stages.sql` is an optional template for databases that do not already have these tables. Compare it with each company's actual schema before considering it; do not apply it to an existing stage table without checking its ID generation and related column types. Missing or incompatible stage/task-type tables and columns return HTTP 503 with an actionable message.
 
 ### Files
 
-Uploads accept a raw binary body with `Content-Type: application/octet-stream` and `?fileName=requirements.png`, up to 10 MiB per file. In Swagger, choose the file in the upload operation. This supports images and common files without an extra multipart dependency. Files live in private, ignored `uploads/projects/` storage with generated names; back up this directory with the database. File metadata uses `tbl_Project_Stage_Files` or the existing `tbl_Discussion_Files`. Failed metadata writes clean up the uploaded bytes.
+Uploads accept a raw binary body with `Content-Type: application/octet-stream` and `?fileName=requirements.png`, up to 10 MiB per file. In Swagger, choose the file in the upload operation. Files live in private, ignored `uploads/projects/` storage with generated names; back up this directory with the database. File metadata uses `tbl_Project_Stage_Files` for stage files or the existing `tbl_Discussion_Files` for discussion attachments. Failed metadata writes clean up the uploaded bytes.
 
 Downloads require the same project/topic access and return attachments with content sniffing disabled. Existing legacy file paths are not served; importing old storage paths needs a separate mapping. The API does not expose the upload directory as static content.

@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node app.mjs",
     "dev": "nodemon app.mjs",
+    "build:frontend": "npm --prefix \"../Software_tool_Frontend\" run build",
     "test": "node --test",
     "migrate": "node backend/scripts/migrate.mjs"
   },

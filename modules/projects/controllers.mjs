@@ -21,7 +21,7 @@ function date(value, name) {
 }
 export function fieldsFor(action, body = {}) {
     if (body === null || typeof body !== 'object' || Array.isArray(body)) throw apiError(400, 'JSON object required');
-    const optionalId = (value, name) => value === undefined || value === null ? null : integer(value, name);
+    const optionalId = (value, name, max = 2147483647) => value === undefined || value === null ? null : integer(value, name, { max });
     if (['createProject', 'updateProject'].includes(action)) {
         const result = {
             name: text(body.Project_Name, 'Project_Name', 500), description: text(body.Project_Desc, 'Project_Desc', 20000, true),
@@ -42,7 +42,7 @@ export function fieldsFor(action, body = {}) {
         active: integer(body.IsActive ?? 1, 'IsActive', { min: 0, max: 1 }),
     };
     if (['createTaskType', 'updateTaskType'].includes(action)) return {
-        taskType: text(body.Task_Type, 'Task_Type', 200), stageId: optionalId(body.stage_Id, 'stage_Id'),
+        taskType: text(body.Task_Type, 'Task_Type', 200), stageId: optionalId(body.stage_Id, 'stage_Id', Number.MAX_SAFE_INTEGER),
         status: integer(body.Status ?? 0, 'Status', { min: 0 }),
     };
     if (['createTopic', 'updateTopic'].includes(action)) {
@@ -71,20 +71,26 @@ function contextFor(req) {
         userId: integer(req.localUserId, 'Authenticated local user'),
     };
     for (const key of ['projectId', 'stageId', 'topicId', 'fileId', 'taskTypeId'])
-        if (req.params[key] !== undefined) result[key] = integer(req.params[key], key);
+        if (req.params[key] !== undefined) result[key] = integer(req.params[key], key, ['stageId', 'fileId'].includes(key) ? { max: Number.MAX_SAFE_INTEGER } : {});
+    if (req.params.fileKey !== undefined) {
+        if (typeof req.params.fileKey !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(req.params.fileKey))
+            throw apiError(400, 'fileKey must be a UUID');
+        result.fileKey = req.params.fileKey.toLowerCase();
+    }
     return result;
 }
-const pageFor = (req) => ({
+export const pageFor = (req, includeSearch = false) => ({
     offset: integer(req.query.offset ?? 0, 'offset', { min: 0, max: 1000000 }),
     limit: integer(req.query.limit ?? 50, 'limit', { max: 100 }),
+    ...(includeSearch ? { search: text(req.query.search ?? '', 'search', 500, true) ?? '' } : {}),
 });
 
 export const handle = (action, serviceFactory = pool => new ProjectService(new ProjectModel(pool))) => async (req, res, next) => {
     try {
         const context = contextFor(req);
         const service = serviceFactory(req.db);
-        if (action === 'download') {
-            const file = await service.download(context);
+        if (action === 'download' || action === 'downloadByKey') {
+            const file = await service.download(context, action === 'downloadByKey');
             res.set('X-Content-Type-Options', 'nosniff');
             return res.download(file.path, file.name, { headers: { 'Content-Type': 'application/octet-stream' } }, error => {
                 if (error) next(error);
@@ -92,14 +98,18 @@ export const handle = (action, serviceFactory = pool => new ProjectService(new P
         }
         let data;
         if (action === 'upload') {
-            const fileName = text(req.query.fileName, 'fileName', 200);
+            const fileName = text(req.query.fileName, 'fileName', 500);
             if (/[\\/\x00-\x1f\x7f]/.test(fileName) || fileName === '.' || fileName === '..') throw apiError(400, 'Invalid fileName');
             if (!Buffer.isBuffer(req.body)) throw apiError(415, 'Send the file as application/octet-stream');
             if (!req.body.length) throw apiError(400, 'File is empty');
             if (req.body.length > 10 * 1024 * 1024) throw apiError(413, 'File exceeds 10 MB');
-            data = await service.upload(context, fileName, req.body);
+            const fileType = (req.get('content-type') || 'application/octet-stream').split(';', 1)[0].trim().toLowerCase();
+            const maxFileTypeLength = context.stageId ? 100 : 50;
+            if (!fileType) throw apiError(400, 'Content-Type cannot be empty');
+            data = await service.upload(context, fileName, req.body,
+                fileType.length <= maxFileTypeLength ? fileType : 'application/octet-stream');
         } else if (action === 'files') data = await service.files(context, pageFor(req));
-        else data = await service.run(action, context, { ...fieldsFor(action, req.body), ...pageFor(req) });
+        else data = await service.run(action, context, { ...fieldsFor(action, req.body), ...pageFor(req, action === 'projects') });
         const created = action.startsWith('create') || action === 'upload';
         return res.status(created ? 201 : 200).json({ success: true, data, message: created ? 'Created successfully' : 'Request successful' });
     } catch (error) { next(error); }
@@ -113,5 +123,5 @@ export function projectErrorHandler(error, req, res, next) {
     const status = missingStageSchema ? 503 : ([400, 401, 403, 404, 413, 415].includes(error.status) ? error.status : 500);
     if (status === 500) return next(error);
     return res.status(status).json({ success: false, data: null,
-        message: missingStageSchema ? 'Required stage schema is unavailable. Apply backend/db/migrations/0001_project_stages.sql to this company database.' : error.message });
+        message: missingStageSchema ? 'Required stage or task-type tables/columns are missing or incompatible in the selected company database. Verify tbl_Project_Stage, tbl_Project_Stage_Files, and tbl_Task_Type.stage_Id.' : error.message });
 }

@@ -31,7 +31,6 @@ export class ProjectService {
         await this.project(context);
         const [topic] = await this.model.topic(context);
         if (!topic) throw missing('Discussion');
-        if (!(await this.model.membership(context)).length) throw apiError(403, 'Discussion membership required');
         return topic;
     }
     async run(action, context, fields) {
@@ -101,18 +100,19 @@ export class ProjectService {
         if (stage) await this.stage(context); else await this.topic(context);
         return this.model.files({ ...context, ...pagination }, stage);
     }
-    async upload(context, fileName, bytes) {
+    async upload(context, fileName, bytes, fileType = 'application/octet-stream') {
         const stage = Boolean(context.stageId);
         if (stage) await this.stage(context); else await this.topic(context);
-        // The path is generated here; no client-supplied path is ever used.
-        const directory = path.join(uploadRoot, String(context.companyId));
+        const uploadDate = new Date().toISOString().slice(0, 10);
+        const category = stage ? `stages/${context.stageId}` : `discussions/${context.topicId}`;
+        const directory = path.join(uploadRoot, String(context.companyId), ...category.split('/'), uploadDate);
         await this.storage.mkdir(directory, { recursive: true });
-        const filePath = `${context.companyId}/${randomUUID()}`;
+        const filePath = `${context.companyId}/${category}/${uploadDate}/${randomUUID()}`;
         const absolute = path.join(uploadRoot, filePath);
         await this.storage.writeFile(absolute, bytes, { flag: 'wx' });
         try {
             const [record] = await this.model.createFile({
-                ...context, fileName, filePath, fileSize: bytes.length, fileType: 'application/octet-stream',
+                ...context, fileName, filePath, fileSize: bytes.length, fileType,
             }, stage);
             return { ...record, File_Name: fileName, File_Size: bytes.length };
         } catch (error) {
@@ -122,13 +122,17 @@ export class ProjectService {
             throw error;
         }
     }
-    async download(context) {
+    async download(context, byKey = false) {
         const stage = Boolean(context.stageId);
         if (stage) await this.stage(context); else await this.topic(context);
-        const [record] = await this.model.file(context, stage);
+        const [record] = await (byKey ? this.model.fileByKey(context, stage) : this.model.file(context, stage));
         if (!record) throw missing('File');
         const relative = record.File_Path;
-        if (typeof relative !== 'string' || !new RegExp(`^${context.companyId}/[a-f0-9-]{36}$`).test(relative))
+        const legacyPath = new RegExp(`^${context.companyId}/[a-f0-9-]{36}$`);
+        const attachmentPath = stage
+            ? new RegExp(`^${context.companyId}/stages/${context.stageId}/\\d{4}-\\d{2}-\\d{2}/[a-f0-9-]{36}$`)
+            : new RegExp(`^${context.companyId}/discussions/${context.topicId}/\\d{4}-\\d{2}-\\d{2}/[a-f0-9-]{36}$`);
+        if (typeof relative !== 'string' || (!legacyPath.test(relative) && !attachmentPath.test(relative)))
             throw apiError(404, 'File is not in managed upload storage');
         const absolute = path.resolve(uploadRoot, relative);
         if (!absolute.startsWith(path.resolve(uploadRoot) + path.sep)) throw missing('File');
